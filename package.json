@@ -1,0 +1,33 @@
+{
+  "name": "@company/app-notes-sdk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local visual annotation layer for AI coding workflows",
+  "scripts": {
+    "build": "pnpm --filter @company/app-notes-client build",
+    "build:all": "pnpm -r build",
+    "dev:client": "pnpm --filter @company/app-notes-client dev",
+    "dev:server": "pnpm --filter @company/app-notes-server dev",
+    "pack:release": "node scripts/pack-release.mjs",
+    "start:server": "pnpm --filter @company/app-notes-server start"
+  },
+  "keywords": [
+    "visual-annotation",
+    "web-components",
+    "ai-coding",
+    "devtools"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "@rollup/plugin-node-resolve": "^16.0.0",
+    "@rollup/plugin-terser": "^0.4.4",
+    "@rollup/plugin-typescript": "^12.1.2",
+    "rollup": "^4.35.0",
+    "tslib": "^2.8.1",
+    "typescript": "^5.8.2"
+  }
+}
