@@ -90,4 +90,38 @@ export const SHARED_STYLES = `
     scrollbar-width: thin;
     scrollbar-color: var(--an-border) transparent;
   }
+  .an-dismiss {
+    position: relative;
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: rgba(60, 60, 67, 0.38);
+    cursor: pointer;
+    transition: color 0.12s ease, background 0.12s ease;
+  }
+  .an-dismiss::before,
+  .an-dismiss::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 10px;
+    height: 1px;
+    background: currentColor;
+    border-radius: 1px;
+  }
+  .an-dismiss::before {
+    transform: translate(-50%, -50%) rotate(45deg);
+  }
+  .an-dismiss::after {
+    transform: translate(-50%, -50%) rotate(-45deg);
+  }
+  .an-dismiss:hover {
+    color: rgba(60, 60, 67, 0.72);
+    background: rgba(60, 60, 67, 0.06);
+  }
 `;

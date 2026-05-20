@@ -6,6 +6,10 @@
   "main": "./dist/app-notes-sdk.js",
   "module": "./dist/app-notes-sdk.esm.js",
   "types": "./dist/index.d.ts",
+  "sideEffects": [
+    "./dist/app-notes-sdk.js",
+    "./dist/app-notes-sdk.esm.js"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

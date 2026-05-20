@@ -86,7 +86,16 @@ export class AppNotesSelectionOverlay extends HTMLElement {
         <button class="an-btn an-btn-ghost" id="cancel">取消</button>
       </div>
     `;
-    root.getElementById('cancel')!.addEventListener('click', () => this.cancel());
+    const cancel = root.getElementById('cancel')!;
+    cancel.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    cancel.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.cancel();
+    });
     this.ensureFloatingHints();
   }
 
@@ -165,6 +174,7 @@ export class AppNotesSelectionOverlay extends HTMLElement {
 
   private handleClick(event: MouseEvent): void {
     if (!this.active) return;
+    if (this.isSdkEvent(event)) return;
     event.preventDefault();
     event.stopPropagation();
     const target = this.hoveredTarget ?? document.elementFromPoint(event.clientX, event.clientY);
@@ -209,6 +219,10 @@ export class AppNotesSelectionOverlay extends HTMLElement {
   private isSdkElement(el: Element): boolean {
     const tag = el.tagName.toLowerCase();
     return tag.startsWith('app-notes-') || !!el.closest('app-notes-root');
+  }
+
+  private isSdkEvent(event: Event): boolean {
+    return event.composedPath().some((item) => item instanceof Element && this.isSdkElement(item));
   }
 
   disconnectedCallback(): void {

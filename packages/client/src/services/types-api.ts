@@ -9,3 +9,7 @@ export interface AppendPayload {
   anchor: NoteAnchor;
   comment: Omit<NoteComment, 'id' | 'status' | 'createdAt'>;
 }
+
+export interface UpdateAnchorPayload {
+  anchor: NoteAnchor;
+}

@@ -13,6 +13,23 @@ export const TAG_LABELS: Record<NoteTag, string> = {
   视觉规范: '[视觉规范]'
 };
 
+/** 创建备注时记录的视口相对位置，用于响应式 / 小屏下区分重复节点。 */
+export interface AnchorLayoutHint {
+  relCenterX: number;
+  relCenterY: number;
+  relWidth: number;
+  relHeight: number;
+}
+
+export interface AnchorRect {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+  width: number;
+  height: number;
+}
+
 export interface NoteAnchor {
   noteId: string;
   pagePath: string;
@@ -23,6 +40,7 @@ export interface NoteAnchor {
   textHint?: string;
   tagName?: string;
   health?: AnchorHealth;
+  layoutHint?: AnchorLayoutHint;
 }
 
 export interface NoteComment {

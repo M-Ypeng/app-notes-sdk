@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { AppendCommentBody, ArchiveCommentBody, NoteComment, NotesFile } from './types.js';
+import type { AppendCommentBody, ArchiveCommentBody, NoteAnchor, NoteComment, NotesFile } from './types.js';
 
 const NOTES_DIR = '.app_notes';
 const ASSETS_DIR = 'assets';
@@ -107,6 +107,18 @@ export class NotesStorage {
       file.meta = { createdAt: file.meta?.createdAt ?? now, updatedAt: now };
       await this.writeNotesFile(noteId, file);
       return comment;
+    });
+  }
+
+  async updateAnchor(noteId: string, anchor: NoteAnchor): Promise<NotesFile | null> {
+    return this.enqueue(async () => {
+      const file = await this.readNotesFile(noteId);
+      if (!file) return null;
+      const now = new Date().toISOString();
+      file.anchor = { ...anchor, noteId };
+      file.meta = { createdAt: file.meta?.createdAt ?? now, updatedAt: now };
+      await this.writeNotesFile(noteId, file);
+      return file;
     });
   }
 

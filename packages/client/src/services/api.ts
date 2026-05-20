@@ -1,10 +1,11 @@
-import type { AppendPayload, NotesListResponse } from './types-api.js';
-import type { CommentStatus, NoteAnchor, NoteComment } from '../types.js';
+import type { AppendPayload, NotesListResponse, UpdateAnchorPayload } from './types-api.js';
+import type { CommentStatus, NoteAnchor, NoteComment, NotesFile } from '../types.js';
 
 export interface NotesDataSource {
   health(): Promise<boolean>;
   fetchNotes(pagePath?: string): Promise<NotesListResponse>;
   appendComment(anchor: NoteAnchor, comment: Omit<NoteComment, 'id' | 'status' | 'createdAt'>): Promise<NoteComment>;
+  updateAnchor(noteId: string, anchor: NoteAnchor): Promise<NotesFile>;
   archiveComment(noteId: string, commentId: string, status: CommentStatus): Promise<NoteComment>;
   uploadImage(file: File | Blob, filename?: string): Promise<string>;
 }
@@ -57,6 +58,17 @@ export class NotesApiClient implements NotesDataSource {
     return data.comment;
   }
 
+  async updateAnchor(noteId: string, anchor: NoteAnchor): Promise<NotesFile> {
+    const res = await fetch(this.url(`/notes/${encodeURIComponent(noteId)}/anchor`), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ anchor } satisfies UpdateAnchorPayload)
+    });
+    if (!res.ok) throw new Error(`Failed to update note anchor: ${res.status}`);
+    const data = (await res.json()) as { file: NotesFile };
+    return data.file;
+  }
+
   async uploadImage(file: File | Blob, filename?: string): Promise<string> {
     const form = new FormData();
     const name = filename ?? (file instanceof File ? file.name : 'paste.png');
@@ -69,8 +81,9 @@ export class NotesApiClient implements NotesDataSource {
 }
 
 export class MemoryNotesClient implements NotesDataSource {
-  private files = new Map<string, import('../types.js').NotesFile>();
+  private files = new Map<string, NotesFile>();
   private images = new Map<string, Blob>();
+  private imageUrls = new Map<string, string>();
 
   async health(): Promise<boolean> {
     return true;
@@ -116,9 +129,24 @@ export class MemoryNotesClient implements NotesDataSource {
     return comment;
   }
 
+  async updateAnchor(noteId: string, anchor: NoteAnchor): Promise<NotesFile> {
+    const file = this.files.get(noteId);
+    if (!file) throw new Error('NOT_FOUND');
+    const now = new Date().toISOString();
+    file.anchor = { ...anchor, noteId };
+    file.meta = { createdAt: file.meta?.createdAt ?? now, updatedAt: now };
+    if (anchor.noteId !== noteId) {
+      this.files.delete(noteId);
+      this.files.set(anchor.noteId, file);
+    }
+    return file;
+  }
+
   async uploadImage(file: File | Blob, filename?: string): Promise<string> {
     const name = `${crypto.randomUUID()}-${filename ?? (file instanceof File ? file.name : 'paste.png')}`;
     this.images.set(name, file);
-    return `memory://${name}`;
+    const url = URL.createObjectURL(file);
+    this.imageUrls.set(name, url);
+    return url;
   }
 }

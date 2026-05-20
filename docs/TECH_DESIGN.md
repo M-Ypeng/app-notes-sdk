@@ -64,20 +64,15 @@ app-notes-sdk/
           shared.ts
         utils/
           dom-anchor.ts
-          xpath.ts
+          dom-settle.ts
           env.ts
+          format.ts
+          page-path.ts
+          xpath.ts
         types.ts
       index.ts
       package.json
       tsconfig.json
-    react/
-      src/
-        index.tsx
-      package.json
-    vue/
-      src/
-        index.ts
-      package.json
     server/
       src/
         index.ts
@@ -115,12 +110,15 @@ app-notes-sdk/
 
 ```ts
 initAppNotes({
+  mode: 'server',           // 'memory' | 'server'
   serverUrl: 'http://localhost:3927',
   pagePath: window.location.pathname,
   enabled: true,
   onNavigateToPage: (pagePath) => router.push(pagePath),
 });
 ```
+
+`mode` 为 `'memory'` 时使用内存存储（无需启动 server），`'server'` 时通过 HTTP API 持久化到 `.app_notes/`。
 
 ### 4.4 开发环境隔离
 
@@ -139,11 +137,11 @@ if (import.meta.env.DEV) {
 
 SDK 内部也需要检查 `enabled` 和开发环境，避免误加载。
 
-### 4.5 框架适配包
+### 4.5 框架适配包 (M2 规划)
 
 Web Components 是跨框架基线，但实际接入 React/Vue 时仍会有事件、类型和生命周期摩擦。
 
-建议提供轻量适配包：
+M2 计划提供轻量适配包：
 
 - `@company/app-notes-react`
 - `@company/app-notes-vue`
@@ -162,7 +160,7 @@ Vue wrapper 目标：
 
 ## 5. Anchor 定位设计
 
-### 5.1 NoteAnchor
+### 5.1 NoteAnchor (实际实现)
 
 ```ts
 interface NoteAnchor {
@@ -174,6 +172,13 @@ interface NoteAnchor {
   selectorHint?: string;
   textHint?: string;
   tagName?: string;
+}
+
+interface AnchorRect {
+  top: number;
+  left: number;
+  width: number;
+  height: number;
 }
 ```
 
@@ -217,9 +222,46 @@ AI 导出和面板列表都应包含该状态。
 - 动态列表：列表项应使用业务主键生成 `data-note-id`，例如 `user-row-${id}`。
 - 组件重渲染：定位逻辑需要在 DOM 变化后重新校验，不可缓存旧 Element 作为唯一依据。
 
-## 6. Server 设计
+## 6. SPA 路由同步
 
-### 6.1 技术选型
+`page-path.ts` 通过劫持 `history.pushState` / `replaceState` 实现对 SPA 路由变化的监听，无需宿主手动调用 `updatePagePath()`。
+
+```ts
+// 自动安装路由监听
+installPagePathSync();
+
+// 监听自定义事件
+window.addEventListener(LOCATION_CHANGE_EVENT, () => {
+  // 路由变化后重新加载当前页备注
+});
+```
+
+页面路径归一化：去掉尾部斜杠、query string 稳定排序，确保同一页面的不同 URL 变体被识别为同一页。
+
+## 7. DOM 稳定策略
+
+`dom-settle.ts` 解决 SPA 导航后 DOM 尚未渲染完成导致的锚点定位失败问题。
+
+```ts
+scheduleAfterDomSettle(callback, { timeoutMs: 5000 });
+```
+
+实现方式：`requestAnimationFrame` + 多层 `setTimeout` 级联，在连续两帧无 DOM 变化后触发回调，最长等待时间可配置。
+
+## 8. 共享工具函数
+
+`format.ts` 集中管理跨组件复用的工具函数：
+
+| 函数 | 用途 |
+|------|------|
+| `clamp(value, min, max)` | 数值范围限制 |
+| `escapeHtml(value)` | HTML 转义 |
+| `escapeAttr(value)` | 属性值转义 |
+| `tagClass(tag, prefix)` | 标签到 CSS 类名映射，`prefix` 参数区分 `'tag-question'` / `'question'` |
+
+## 9. Server 设计
+
+### 9.1 技术选型
 
 - Node.js
 - TypeScript
@@ -228,7 +270,7 @@ AI 导出和面板列表都应包含该状态。
 - `fs/promises`
 - JSON 文件存储
 
-### 6.2 CLI
+### 9.2 CLI
 
 ```bash
 app-notes-server --port 3927 --root /path/to/project
@@ -239,7 +281,7 @@ app-notes-server --port 3927 --root /path/to/project
 - `--port` / `-p`：监听端口，默认 `3927`。
 - `--root` / `-r`：备注写入项目根目录，默认当前工作目录。
 
-### 6.3 数据目录
+### 9.3 数据目录
 
 ```text
 .app_notes/
@@ -249,9 +291,9 @@ app-notes-server --port 3927 --root /path/to/project
     image-xxx.png
 ```
 
-## 7. 数据模型
+## 10. 数据模型
 
-### 7.1 Schema Version
+### 10.1 Schema Version
 
 所有 notes 文件从 v1 起必须包含 schema version，避免未来字段演进时无法兼容老项目。
 
@@ -269,7 +311,7 @@ interface NotesFile {
 }
 ```
 
-### 7.2 NoteComment
+### 10.2 NoteComment
 
 ```ts
 type NoteTag = '疑问' | '变更建议' | '逻辑补充' | '视觉规范';
@@ -288,7 +330,7 @@ interface NoteComment {
 }
 ```
 
-### 7.3 NotesFile
+### 10.3 NotesFile
 
 ```ts
 interface NotesFile {
@@ -302,7 +344,7 @@ interface NotesFile {
 }
 ```
 
-### 7.4 文件示例
+### 10.4 文件示例
 
 ```json
 {
@@ -328,15 +370,15 @@ interface NotesFile {
 }
 ```
 
-## 8. API 设计
+## 11. API 设计
 
-### 8.1 Health
+### 11.1 Health
 
 ```http
 GET /api/health
 ```
 
-### 8.2 获取备注列表
+### 11.2 获取备注列表
 
 ```http
 GET /api/notes?pagePath=/dashboard
@@ -345,13 +387,13 @@ GET /api/notes?pagePath=/dashboard
 - 传 `pagePath`：返回指定页面备注。
 - 不传 `pagePath`：返回全部备注。
 
-### 8.3 获取单个锚点文件
+### 11.3 获取单个锚点文件
 
 ```http
 GET /api/notes/:noteId
 ```
 
-### 8.4 新增备注
+### 11.4 新增备注
 
 ```http
 POST /api/notes
@@ -364,7 +406,7 @@ POST /api/notes
 }
 ```
 
-### 8.5 归档/重新打开
+### 11.5 归档/重新打开
 
 ```http
 PATCH /api/notes/:noteId/comments/:commentId
@@ -376,7 +418,7 @@ PATCH /api/notes/:noteId/comments/:commentId
 }
 ```
 
-### 8.6 上传图片
+### 11.6 上传图片
 
 ```http
 POST /api/upload
@@ -384,13 +426,13 @@ POST /api/upload
 
 表单字段：`file`
 
-### 8.7 访问图片
+### 11.7 访问图片
 
 ```http
 GET /api/assets/:filename
 ```
 
-## 9. 写入与冲突防御
+## 12. 写入与冲突防御
 
 新增备注时：
 
@@ -402,9 +444,9 @@ GET /api/assets/:filename
 
 不支持历史评论编辑，仅支持追加和状态切换。
 
-## 10. 性能边界与缓存
+## 13. 性能边界与缓存
 
-### 10.1 Client 性能
+### 13.1 Client 性能
 
 风险：
 
@@ -419,7 +461,7 @@ GET /api/assets/:filename
 - 对低置信或失效锚点不渲染气泡。
 - 面板列表和页面气泡分离，列表可以显示全部，页面只显示当前页可定位备注。
 
-### 10.2 Server 性能
+### 13.2 Server 性能
 
 风险：
 
@@ -434,16 +476,16 @@ GET /api/assets/:filename
 - 读取列表时优先使用缓存，mtime 变化后再重新 parse。
 - 写入后更新对应缓存项。
 
-### 10.3 性能目标
+### 13.3 性能目标
 
 MVP 可接受目标：
 
 - 100 个 notes 文件内，列表接口响应应保持在 200ms 以内。
 - 当前页面 30 条 open 备注内，滚动和 resize 不出现明显卡顿。
 
-## 11. AI 扩展设计
+## 14. AI 扩展设计
 
-### 11.1 Export API
+### 14.1 Export API
 
 后续提供：
 
@@ -462,7 +504,7 @@ GET /api/export
 - 视口信息。
 - 用户修复意图。
 
-### 11.2 MCP Server
+### 14.2 MCP Server
 
 候选工具：
 
@@ -471,65 +513,24 @@ GET /api/export
 - `mark_annotation_resolved`
 - `list_invalid_anchors`
 
-## 12. M1 开发顺序建议
+## 15. M1 开发顺序 (已完成)
 
-M1 的核心目标是先验证最难、风险最高的页面选区与元素锚点能力，再逐步补齐交互闭环和本地持久化。
+M1 已按以下顺序完成实现：
 
-推荐顺序：
+1. `selection-overlay` — 选区高亮、hover 目标识别、点击生成 anchor、排除 SDK 自身元素
+2. `note-form` — 文本输入、标签/角色选择、图片上传/拖拽/粘贴、表单校验、回调式提交流程
+3. `store + api` 抽象层 — 内存模式与 Server 模式双实现，通过 `NotesDataSource` 接口切换
+4. `note-bubble` — 彩色 pin 气泡、展开/折叠详情卡片、多评论分组、滚动/resize 重定位、低置信锚点不渲染
+5. `notes-panel` — 备注列表/详情、分类/tag 筛选、健康度展示、归档/重开、定位元素
+6. `floating-ball` — 悬浮入口、拖拽、localStorage 位置持久化
+7. `server` — Express 服务、JSON 追加写入、图片上传+MIME 校验、静态资源访问
+8. Client ↔ Server 联调 — HTTP API 对接、`.app_notes/` 读写验证、刷新恢复验证
+9. SPA 路由同步 — `history` API 劫持 + `popstate`/`hashchange` + 自定义事件
+10. DOM settle 策略 — RAF + setTimeout 级联，导航后延迟锚点重解析
 
-1. `selection-overlay`
-   - 选区高亮。
-   - hover 目标识别。
-   - 点击元素生成初始 anchor。
-   - 排除 SDK 自身元素。
-
-2. `note-form`
-   - 文本输入。
-   - 标签和角色选择。
-   - 图片上传、拖拽、粘贴。
-   - 表单校验。
-
-3. `store + api` 抽象层
-   - 先实现内存模式，减少早期对 server 的依赖。
-   - 统一 `addComment`、`listNotes`、`archiveComment` 等接口。
-   - 后续切换到 server 模式时不改 UI 组件。
-
-4. `note-bubble`
-   - 当前页备注气泡渲染。
-   - 基于 anchor 定位元素。
-   - 滚动、resize、缩放后的重定位。
-   - 低置信锚点不渲染。
-
-5. `notes-panel`
-   - 备注列表。
-   - 备注详情。
-   - 归档/重新打开。
-   - 定位元素。
-
-6. `floating-ball`
-   - 悬浮入口。
-   - 拖拽。
-   - 快捷键 `Ctrl+Shift+N`。
-
-7. `server`
-   - Express 服务。
-   - JSON 文件追加写入。
-   - 图片上传。
-   - 静态图片访问。
-
-8. Client 切换 server 模式联调
-   - 将内存 API 切换为 HTTP API。
-   - 验证 `.app_notes/` 写入。
-   - 验证刷新页面后备注恢复。
-
-9. 多框架接入验证
-   - Vite + React。
-   - Vite + Vue。
-   - 原生 HTML/JS。
-
-这个顺序的原则：
-
-- 先验证最大技术风险：复杂页面中的选区和锚点。
-- UI 组件先跑内存闭环，避免被服务端阻塞。
-- 服务端后置，但 API 抽象前置。
-- 最后做跨框架验证，确保 Web Components 接入模型成立。
+M2 规划内容：
+- 多框架接入验证 (React/Vue/原生 JS)
+- React/Vue wrapper 适配包
+- 锚点健康度报告
+- 跨页跳转定位
+- 重新绑定元素

@@ -1,4 +1,6 @@
 import { SHARED_STYLES } from '../styles/shared.js';
+import type { AnchorRect } from '../types.js';
+import { clamp } from '../utils/format.js';
 
 type ToolAction = 'start-selection' | 'toggle-panel' | 'toggle-bubbles';
 
@@ -8,6 +10,19 @@ interface ToolItem {
   icon: string;
   primary?: boolean;
 }
+
+interface FloatingPositionCache {
+  version: 1;
+  left: number;
+  top: number;
+  viewportWidth: number;
+  viewportHeight: number;
+  relX: number;
+  relY: number;
+}
+
+const POSITION_CACHE_KEY = 'app-notes:floating-ball-position';
+const EDGE_GAP = 8;
 
 const TOOLS: ToolItem[] = [
   {
@@ -49,12 +64,23 @@ export class AppNotesFloatingBall extends HTMLElement {
   private offsetY = 0;
   private pointerDownX = 0;
   private pointerDownY = 0;
+  private suppressNextClick = false;
+  private lastLeft: number | null = null;
+  private lastTop: number | null = null;
 
   connectedCallback(): void {
     if (!this.shadowRoot) {
       this.attachShadow({ mode: 'open' });
       this.render();
     }
+    requestAnimationFrame(() => this.restorePosition());
+    window.addEventListener('resize', this.clampCachedPosition);
+    window.visualViewport?.addEventListener('resize', this.clampCachedPosition);
+  }
+
+  disconnectedCallback(): void {
+    window.removeEventListener('resize', this.clampCachedPosition);
+    window.visualViewport?.removeEventListener('resize', this.clampCachedPosition);
   }
 
   private render(): void {
@@ -82,6 +108,13 @@ export class AppNotesFloatingBall extends HTMLElement {
           box-shadow: 0 14px 34px rgba(15, 23, 42, 0.14), 0 2px 8px rgba(15, 23, 42, 0.06);
           backdrop-filter: blur(18px) saturate(160%);
           -webkit-backdrop-filter: blur(18px) saturate(160%);
+          cursor: grab;
+          touch-action: none;
+          user-select: none;
+          -webkit-user-select: none;
+        }
+        .dock.dragging {
+          cursor: grabbing;
         }
         .tool {
           position: relative;
@@ -150,22 +183,24 @@ export class AppNotesFloatingBall extends HTMLElement {
 
     root.querySelector('.dock')!.addEventListener('pointerdown', (event) => this.startDrag(event as PointerEvent));
     root.querySelectorAll<HTMLButtonElement>('.tool').forEach((button) => {
-      button.addEventListener('pointerdown', (event) => {
-        event.stopPropagation();
-      });
-      button.addEventListener('click', () => {
-        if (this.dragging) return;
-        this.emitAction(button.dataset.action as ToolAction);
+      button.addEventListener('click', (event) => {
+        if (this.dragging || this.suppressNextClick) {
+          event.preventDefault();
+          event.stopPropagation();
+          this.suppressNextClick = false;
+          return;
+        }
+        this.emitAction(button.dataset.action as ToolAction, toPlainRect(button.getBoundingClientRect()));
       });
     });
   }
 
-  private emitAction(action: ToolAction): void {
+  private emitAction(action: ToolAction, rect: AnchorRect): void {
     if (action === 'toggle-bubbles') {
       this.dispatchEvent(new CustomEvent('toolbar-toggle-bubbles', { bubbles: true, composed: true }));
       return;
     }
-    this.dispatchEvent(new CustomEvent(action, { bubbles: true, composed: true }));
+    this.dispatchEvent(new CustomEvent(action, { bubbles: true, composed: true, detail: { rect } }));
   }
 
   private startDrag(event: PointerEvent): void {
@@ -176,24 +211,115 @@ export class AppNotesFloatingBall extends HTMLElement {
     const rect = this.getBoundingClientRect();
     this.offsetX = event.clientX - rect.left;
     this.offsetY = event.clientY - rect.top;
+    const dock = this.shadowRoot?.querySelector<HTMLElement>('.dock');
 
+    let dragStarted = false;
     const move = (moveEvent: PointerEvent): void => {
       const moved = Math.hypot(moveEvent.clientX - this.pointerDownX, moveEvent.clientY - this.pointerDownY);
       if (moved < 4) return;
+      if (!dragStarted) {
+        dragStarted = true;
+        this.dispatchEvent(new CustomEvent('toolbar-drag-start', { bubbles: true, composed: true }));
+      }
       this.dragging = true;
-      this.style.left = `${moveEvent.clientX - this.offsetX}px`;
-      this.style.top = `${moveEvent.clientY - this.offsetY}px`;
-      this.style.right = 'auto';
-      this.style.bottom = 'auto';
+      this.suppressNextClick = true;
+      dock?.classList.add('dragging');
+      const width = rect.width;
+      const height = rect.height;
+      this.applyPosition(moveEvent.clientX - this.offsetX, moveEvent.clientY - this.offsetY, width, height);
     };
     const up = (): void => {
       document.removeEventListener('pointermove', move);
       document.removeEventListener('pointerup', up);
-      window.setTimeout(() => { this.dragging = false; }, 0);
+      dock?.classList.remove('dragging');
+      this.savePosition();
+      window.setTimeout(() => { this.dragging = false; }, 60);
     };
 
     document.addEventListener('pointermove', move);
     document.addEventListener('pointerup', up);
+  }
+
+  private restorePosition(): void {
+    const cached = readPositionCache();
+    if (!cached) return;
+    const rect = this.getBoundingClientRect();
+    const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
+    const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+    const left = Number.isFinite(cached.relX) ? cached.relX * viewportWidth : cached.left;
+    const top = Number.isFinite(cached.relY) ? cached.relY * viewportHeight : cached.top;
+    this.applyPosition(left, top, rect.width, rect.height);
+  }
+
+  private clampCachedPosition = (): void => {
+    if (this.lastLeft === null || this.lastTop === null) return;
+    const rect = this.getBoundingClientRect();
+    this.applyPosition(this.lastLeft, this.lastTop, rect.width, rect.height);
+    this.savePosition();
+  };
+
+  private applyPosition(left: number, top: number, width: number, height: number): void {
+    const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
+    const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+    const nextLeft = clamp(left, EDGE_GAP, viewportWidth - width - EDGE_GAP);
+    const nextTop = clamp(top, EDGE_GAP, viewportHeight - height - EDGE_GAP);
+    this.lastLeft = nextLeft;
+    this.lastTop = nextTop;
+    this.style.left = `${nextLeft}px`;
+    this.style.top = `${nextTop}px`;
+    this.style.right = 'auto';
+    this.style.bottom = 'auto';
+  }
+
+  private savePosition(): void {
+    if (this.lastLeft === null || this.lastTop === null) return;
+    try {
+      const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
+      const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+      const cache: FloatingPositionCache = {
+        version: 1,
+        left: this.lastLeft,
+        top: this.lastTop,
+        viewportWidth,
+        viewportHeight,
+        relX: viewportWidth > 0 ? this.lastLeft / viewportWidth : 0,
+        relY: viewportHeight > 0 ? this.lastTop / viewportHeight : 0
+      };
+      window.localStorage.setItem(POSITION_CACHE_KEY, JSON.stringify(cache));
+    } catch {
+      // Ignore storage failures in private mode or restricted host pages.
+    }
+  }
+}
+
+function toPlainRect(rect: DOMRect): AnchorRect {
+  return {
+    left: rect.left,
+    top: rect.top,
+    right: rect.right,
+    bottom: rect.bottom,
+    width: rect.width,
+    height: rect.height
+  };
+}
+
+function readPositionCache(): FloatingPositionCache | null {
+  try {
+    const raw = window.localStorage.getItem(POSITION_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<FloatingPositionCache>;
+    if (parsed.version !== 1 || typeof parsed.left !== 'number' || typeof parsed.top !== 'number') return null;
+    return {
+      version: 1,
+      left: parsed.left,
+      top: parsed.top,
+      viewportWidth: typeof parsed.viewportWidth === 'number' ? parsed.viewportWidth : window.innerWidth,
+      viewportHeight: typeof parsed.viewportHeight === 'number' ? parsed.viewportHeight : window.innerHeight,
+      relX: typeof parsed.relX === 'number' ? parsed.relX : parsed.left / (parsed.viewportWidth || window.innerWidth || 1),
+      relY: typeof parsed.relY === 'number' ? parsed.relY : parsed.top / (parsed.viewportHeight || window.innerHeight || 1)
+    };
+  } catch {
+    return null;
   }
 }
 
