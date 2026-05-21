@@ -1,11 +1,13 @@
-import type { AppendPayload, NotesListResponse, UpdateAnchorPayload } from './types-api.js';
-import type { CommentStatus, NoteAnchor, NoteComment, NotesFile } from '../types.js';
+import type { AppendPayload, NotesListResponse, UpdateAnchorPayload, UpdateFixPayload } from './types-api.js';
+import { APP_NOTES_SCHEMA_VERSION } from '../types.js';
+import type { CommentStatus, NoteAnchor, NoteComment, NotesFile, NotesFixRecord, NotesRuntimeContext } from '../types.js';
 
 export interface NotesDataSource {
   health(): Promise<boolean>;
   fetchNotes(pagePath?: string): Promise<NotesListResponse>;
-  appendComment(anchor: NoteAnchor, comment: Omit<NoteComment, 'id' | 'status' | 'createdAt'>): Promise<NoteComment>;
+  appendComment(anchor: NoteAnchor, comment: Omit<NoteComment, 'id' | 'status' | 'createdAt'>, context?: NotesRuntimeContext): Promise<NoteComment>;
   updateAnchor(noteId: string, anchor: NoteAnchor): Promise<NotesFile>;
+  updateFix(noteId: string, fix: NotesFixRecord): Promise<NotesFile>;
   archiveComment(noteId: string, commentId: string, status: CommentStatus): Promise<NoteComment>;
   uploadImage(file: File | Blob, filename?: string): Promise<string>;
 }
@@ -33,11 +35,11 @@ export class NotesApiClient implements NotesDataSource {
     return res.json() as Promise<NotesListResponse>;
   }
 
-  async appendComment(anchor: NoteAnchor, comment: Omit<NoteComment, 'id' | 'status' | 'createdAt'>): Promise<NoteComment> {
+  async appendComment(anchor: NoteAnchor, comment: Omit<NoteComment, 'id' | 'status' | 'createdAt'>, context?: NotesRuntimeContext): Promise<NoteComment> {
     const res = await fetch(this.url('/notes'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ anchor, comment } satisfies AppendPayload)
+      body: JSON.stringify({ anchor, comment, context } satisfies AppendPayload)
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -69,6 +71,17 @@ export class NotesApiClient implements NotesDataSource {
     return data.file;
   }
 
+  async updateFix(noteId: string, fix: NotesFixRecord): Promise<NotesFile> {
+    const res = await fetch(this.url(`/notes/${encodeURIComponent(noteId)}/fix`), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fix } satisfies UpdateFixPayload)
+    });
+    if (!res.ok) throw new Error(`Failed to update note fix record: ${res.status}`);
+    const data = (await res.json()) as { file: NotesFile };
+    return data.file;
+  }
+
   async uploadImage(file: File | Blob, filename?: string): Promise<string> {
     const form = new FormData();
     const name = filename ?? (file instanceof File ? file.name : 'paste.png');
@@ -94,7 +107,7 @@ export class MemoryNotesClient implements NotesDataSource {
     return { pagePath, files };
   }
 
-  async appendComment(anchor: NoteAnchor, comment: Omit<NoteComment, 'id' | 'status' | 'createdAt'>): Promise<NoteComment> {
+  async appendComment(anchor: NoteAnchor, comment: Omit<NoteComment, 'id' | 'status' | 'createdAt'>, context?: NotesRuntimeContext): Promise<NoteComment> {
     const now = new Date().toISOString();
     const saved: NoteComment = {
       id: crypto.randomUUID(),
@@ -103,17 +116,20 @@ export class MemoryNotesClient implements NotesDataSource {
       tags: comment.tags ?? [],
       role: comment.role,
       status: 'open',
-      createdAt: now
+      createdAt: now,
+      ai: comment.ai
     };
     const existing = this.files.get(anchor.noteId);
     if (existing) {
       existing.comments.push(saved);
+      existing.context = context ?? existing.context;
       existing.meta = { createdAt: existing.meta?.createdAt ?? now, updatedAt: now };
     } else {
       this.files.set(anchor.noteId, {
-        schemaVersion: 1,
+        schemaVersion: APP_NOTES_SCHEMA_VERSION,
         anchor,
         comments: [saved],
+        context,
         meta: { createdAt: now, updatedAt: now }
       });
     }
@@ -139,6 +155,15 @@ export class MemoryNotesClient implements NotesDataSource {
       this.files.delete(noteId);
       this.files.set(anchor.noteId, file);
     }
+    return file;
+  }
+
+  async updateFix(noteId: string, fix: NotesFixRecord): Promise<NotesFile> {
+    const file = this.files.get(noteId);
+    if (!file) throw new Error('NOT_FOUND');
+    const now = new Date().toISOString();
+    file.fix = fix;
+    file.meta = { createdAt: file.meta?.createdAt ?? now, updatedAt: now };
     return file;
   }
 

@@ -1,5 +1,5 @@
 import { SHARED_STYLES } from '../styles/shared.js';
-import { TAG_LABELS, type AnchorHealth, type AnchorRect, type FlatNote } from '../types.js';
+import { TAG_LABELS, type AnchorHealth, type AnchorRect, type FlatNote, type NotesFixRecord } from '../types.js';
 import type { NotesStore } from '../services/store.js';
 import { getAnchorHealth } from '../utils/dom-anchor.js';
 import { clamp, escapeAttr, escapeHtml, tagClass } from '../utils/format.js';
@@ -69,6 +69,8 @@ export class AppNotesPanel extends HTMLElement {
       '<span class="tag neutral">无标签</span>';
     const isCurrent = isCurrentPagePath(note.anchor.pagePath);
     const health = getAnchorHealth(note.anchor);
+    const evidence = note.anchor.evidence;
+    const aiBlock = renderAiBlock(note.comment.ai);
     detail.innerHTML = `
       <div class="detail-top">
         <button type="button" class="back-link" data-action="back">
@@ -89,7 +91,13 @@ export class AppNotesPanel extends HTMLElement {
           <div><dt>页面</dt><dd title="${escapeAttr(note.anchor.pagePath)}">${escapeHtml(formatPageLabel(note.anchor.pagePath))}</dd></div>
           <div><dt>锚点</dt><dd><code>${escapeHtml(note.anchor.noteId)}</code></dd></div>
           <div><dt>时间</dt><dd>${formatTime(note.comment.createdAt)}</dd></div>
+          <div><dt>匹配方式</dt><dd>${escapeHtml(evidenceMethodLabel(evidence?.matchedBy))}</dd></div>
+          <div><dt>匹配分</dt><dd>${typeof evidence?.matchScore === 'number' ? evidence.matchScore : '-'}</dd></div>
+          <div><dt>验证时间</dt><dd>${evidence?.lastValidatedAt ? formatTime(evidence.lastValidatedAt) : '-'}</dd></div>
         </dl>
+        ${aiBlock}
+        ${renderFixForm(note)}
+        ${evidence?.failureReason ? `<p class="evidence-warning">${escapeHtml(evidence.failureReason)}</p>` : ''}
         <div class="actions">
           <button type="button" class="an-btn an-btn-ghost" id="archive">${note.comment.status === 'open' ? '归档' : '重新打开'}</button>
           <button type="button" class="an-btn an-btn-ghost" id="rebind">重新绑定</button>
@@ -105,6 +113,14 @@ export class AppNotesPanel extends HTMLElement {
     });
     detail.querySelector('#locate')!.addEventListener('click', () => {
       this.dispatchEvent(new CustomEvent('locate-element', { bubbles: true, composed: true, detail: { note } }));
+    });
+    detail.querySelector('#fix-form')?.addEventListener('submit', (event) => {
+      event.preventDefault();
+      this.dispatchEvent(new CustomEvent('update-fix-record', {
+        bubbles: true,
+        composed: true,
+        detail: { note, fix: readFixForm(detail) }
+      }));
     });
   }
 
@@ -219,11 +235,11 @@ export class AppNotesPanel extends HTMLElement {
                 <span class="role-pill">${escapeHtml(note.comment.role)}</span>
                 ${tags ? `<span class="tags">${tags}</span>` : ''}
                 ${note.comment.images.length ? '<span class="media-badge" title="含图片">图</span>' : ''}
-                <span class="item-go">${current ? '定位' : '前往'}</span>
               </span>
               <span class="summary">${summary}${note.comment.content.length > 72 ? '…' : ''}</span>
               <span class="item-foot">
                 <span class="page" title="${escapeAttr(note.anchor.pagePath)}">${escapeHtml(pageLabel)}</span>
+                ${current ? '' : '<span class="page-state">跨页</span>'}
               </span>
             </span>
           </button>
@@ -521,12 +537,13 @@ const PANEL_STYLES = `
   .item[data-tag=""] .item-accent { background: rgba(60, 60, 67, 0.22); }
 
   .item-main {
+    position: relative;
     flex: 1;
     min-width: 0;
     display: flex;
     flex-direction: column;
     gap: 6px;
-    padding: 10px 11px 10px 10px;
+    padding: 10px 14px 10px 10px;
   }
 
   .item-head {
@@ -580,17 +597,6 @@ const PANEL_STYLES = `
     background: rgba(60, 60, 67, 0.07);
   }
 
-  .item-go {
-    margin-left: auto;
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--an-accent);
-    opacity: 0.9;
-  }
-  .item:hover .item-go {
-    opacity: 1;
-  }
-
   .summary {
     font-size: 13px;
     line-height: 1.5;
@@ -618,13 +624,18 @@ const PANEL_STYLES = `
     white-space: nowrap;
     max-width: 68%;
   }
+  .page-state {
+    flex: 0 0 auto;
+    color: rgba(60, 60, 67, 0.48);
+    font-size: 10px;
+    font-weight: 650;
+  }
   .item.is-current .page::after {
     content: ' · 当前';
     color: var(--an-accent);
     font-family: var(--an-font);
     font-weight: 600;
   }
-
   .health-pill {
     flex-shrink: 0;
     font-size: 10px;
@@ -803,6 +814,121 @@ const PANEL_STYLES = `
     letter-spacing: 0.06em;
     color: var(--an-text-muted);
   }
+
+  .evidence-warning {
+    margin: -2px 0 12px;
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: rgba(255, 149, 0, 0.1);
+    color: #9a6700;
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  .ai-block {
+    margin: 0 0 12px;
+    display: grid;
+    gap: 8px;
+  }
+  .ai-row {
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: rgba(0, 122, 255, 0.06);
+  }
+  .ai-row strong {
+    display: block;
+    margin-bottom: 3px;
+    color: var(--an-text-muted);
+    font-size: 10px;
+    font-weight: 750;
+  }
+  .ai-row p {
+    margin: 0;
+    color: var(--an-text);
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+  }
+  .ai-row ol,
+  .ai-row ul {
+    margin: 0;
+    padding-left: 18px;
+    color: var(--an-text);
+    font-size: 12px;
+    line-height: 1.55;
+  }
+
+  .fix-form {
+    display: grid;
+    gap: 9px;
+    margin: 10px 0 12px;
+    padding: 10px;
+    border: 1px solid rgba(60, 60, 67, 0.1);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.72);
+  }
+  .fix-form-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    color: var(--an-text);
+    font-size: 12px;
+    font-weight: 750;
+  }
+  .fix-form label {
+    display: grid;
+    gap: 4px;
+    color: var(--an-text-muted);
+    font-size: 10px;
+    font-weight: 700;
+  }
+  .fix-form textarea {
+    width: 100%;
+    min-height: 54px;
+    resize: vertical;
+    box-sizing: border-box;
+    border: 1px solid rgba(60, 60, 67, 0.12);
+    border-radius: 9px;
+    padding: 7px 8px;
+    background: rgba(248, 249, 252, 0.9);
+    color: var(--an-text);
+    font: 12px/1.45 var(--an-font);
+    outline: none;
+  }
+  .fix-form textarea:focus {
+    border-color: rgba(0, 122, 255, 0.42);
+    box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.1);
+  }
+  .fix-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .fix-check {
+    display: inline-flex !important;
+    grid-template-columns: none !important;
+    align-items: center;
+    gap: 6px !important;
+    color: var(--an-text);
+    font-size: 11px !important;
+    font-weight: 650 !important;
+  }
+  .fix-check input {
+    width: 14px;
+    height: 14px;
+    accent-color: var(--an-accent);
+  }
+  .fix-time {
+    color: var(--an-text-muted);
+    font-size: 10px;
+  }
+  .fix-form .an-btn {
+    min-height: 28px;
+    padding: 5px 10px;
+    font-size: 11px;
+  }
   .meta-grid dd {
     margin: 0;
     font-size: 12px;
@@ -877,6 +1003,83 @@ function healthLabel(health: AnchorHealth): string {
     default:
       return health;
   }
+}
+
+function evidenceMethodLabel(method: string | undefined): string {
+  switch (method) {
+    case 'data-note-id':
+      return 'data-note-id';
+    case 'id':
+      return 'ID';
+    case 'css':
+      return 'CSS';
+    case 'xpath':
+      return 'XPath';
+    case 'text':
+      return '文本';
+    case 'layout':
+      return '布局';
+    case 'none':
+      return '无匹配';
+    default:
+      return '-';
+  }
+}
+
+function renderAiBlock(ai: FlatNote['comment']['ai']): string {
+  if (!ai) return '';
+  const rows: string[] = [];
+  if (ai.expected) rows.push(`<div class="ai-row"><strong>期望</strong><p>${escapeHtml(ai.expected)}</p></div>`);
+  if (ai.actual) rows.push(`<div class="ai-row"><strong>实际</strong><p>${escapeHtml(ai.actual)}</p></div>`);
+  if (ai.stepsToReproduce?.length) {
+    rows.push(`<div class="ai-row"><strong>复现步骤</strong><ol>${ai.stepsToReproduce.map((step) => `<li>${escapeHtml(step)}</li>`).join('')}</ol></div>`);
+  }
+  if (ai.fixHints?.length) {
+    rows.push(`<div class="ai-row"><strong>修复线索</strong><ul>${ai.fixHints.map((hint) => `<li>${escapeHtml(hint)}</li>`).join('')}</ul></div>`);
+  }
+  return rows.length ? `<div class="ai-block">${rows.join('')}</div>` : '';
+}
+
+function renderFixForm(note: FlatNote): string {
+  const fix = note.fix;
+  return `
+    <form class="fix-form" id="fix-form">
+      <div class="fix-form-title">
+        <span>修复记录</span>
+        ${fix?.verifiedAt ? `<span class="fix-time">${formatTime(fix.verifiedAt)}</span>` : ''}
+      </div>
+      <label>
+        摘要
+        <textarea id="fix-summary" placeholder="记录本次修复做了什么">${escapeHtml(fix?.summary ?? '')}</textarea>
+      </label>
+      <label>
+        改动文件
+        <textarea id="fix-files" placeholder="每行一个文件路径">${escapeHtml((fix?.changedFiles ?? []).join('\n'))}</textarea>
+      </label>
+      <div class="fix-row">
+        <label class="fix-check">
+          <input type="checkbox" id="fix-verified" ${fix?.verified ? 'checked' : ''} />
+          已验证
+        </label>
+        <button type="submit" class="an-btn an-btn-ghost">保存修复记录</button>
+      </div>
+    </form>
+  `;
+}
+
+function readFixForm(root: ParentNode): NotesFixRecord {
+  const summary = (root.querySelector('#fix-summary') as HTMLTextAreaElement | null)?.value.trim() ?? '';
+  const changedFiles = splitLines((root.querySelector('#fix-files') as HTMLTextAreaElement | null)?.value ?? '');
+  const verified = Boolean((root.querySelector('#fix-verified') as HTMLInputElement | null)?.checked);
+  return {
+    ...(summary ? { summary } : {}),
+    ...(changedFiles.length ? { changedFiles } : {}),
+    ...(verified ? { verified: true, verifiedAt: new Date().toISOString() } : { verified: false })
+  };
+}
+
+function splitLines(value: string): string[] {
+  return value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
 }
 
 function filterNotes(notes: FlatNote[], filter: PanelFilter, tagFilter: TagFilter): FlatNote[] {

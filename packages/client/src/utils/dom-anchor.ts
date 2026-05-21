@@ -1,9 +1,14 @@
-import type { AnchorHealth, AnchorLayoutHint, NoteAnchor } from '../types.js';
+import type { AnchorEvidence, AnchorHealth, AnchorLayoutHint, AnchorMatchMethod, NoteAnchor } from '../types.js';
 import { findElementByXPath, getElementXPath } from './xpath.js';
 
 const MIN_SCORE_STABLE = 70;
 const MIN_SCORE_MEDIUM = 42;
 const MIN_SCORE_LOW = 24;
+
+export interface AnchorResolveResult {
+  element: Element | null;
+  evidence: AnchorEvidence;
+}
 
 export function resolveAnchorFromElement(el: Element, pagePath: string): NoteAnchor {
   const anchorEl = findNearestDataNoteElement(el) ?? el;
@@ -32,43 +37,98 @@ export function resolveAnchorFromElement(el: Element, pagePath: string): NoteAnc
     textHint,
     tagName,
     health,
-    layoutHint
+    layoutHint,
+    evidence: {
+      matchedBy: dataId ? 'data-note-id' : anchorEl.id ? 'id' : cssSelector ? 'css' : 'xpath',
+      matchScore: 100,
+      lastValidatedAt: new Date().toISOString()
+    }
   };
 }
 
 export function findElementByAnchor(anchor: NoteAnchor): Element | null {
+  return resolveElementByAnchor(anchor).element;
+}
+
+export function resolveElementByAnchor(anchor: NoteAnchor): AnchorResolveResult {
+  const validatedAt = new Date().toISOString();
   if (anchor.noteId && !anchor.noteId.startsWith('xpath_')) {
     const byDataId = safeQuerySelector(`[data-note-id="${cssEscape(anchor.noteId)}"]`);
-    if (byDataId && !isSdkElement(byDataId) && isElementVisibleForAnchor(byDataId)) return byDataId;
-    if (byDataId && !isSdkElement(byDataId)) return byDataId;
+    if (byDataId && !isSdkElement(byDataId) && isElementVisibleForAnchor(byDataId)) {
+      return {
+        element: byDataId,
+        evidence: { matchedBy: 'data-note-id', matchScore: 100, lastValidatedAt: validatedAt }
+      };
+    }
+    if (byDataId && !isSdkElement(byDataId)) {
+      return {
+        element: byDataId,
+        evidence: { matchedBy: 'data-note-id', matchScore: 100, failureReason: 'matched element is not visible', lastValidatedAt: validatedAt }
+      };
+    }
   }
 
   const candidates = collectCandidates(anchor);
-  if (candidates.length === 0) return null;
+  if (candidates.length === 0) {
+    return {
+      element: null,
+      evidence: { matchedBy: 'none', matchScore: 0, failureReason: 'no candidate matched stored selectors, xpath, or text hints', lastValidatedAt: validatedAt }
+    };
+  }
 
   const minScore = getMinAcceptScore(anchor);
-  const pickBest = (pool: Element[]): { el: Element | null; score: number } => {
+  const pickBest = (pool: Element[]): { el: Element | null; score: number; matchedBy: AnchorMatchMethod } => {
     let best: Element | null = null;
     let bestScore = 0;
+    let matchedBy: AnchorMatchMethod = 'none';
     for (const el of pool) {
       const score = scoreAnchorMatch(el, anchor);
       if (score > bestScore) {
         bestScore = score;
         best = el;
+        matchedBy = inferMatchMethod(el, anchor);
       }
     }
-    return { el: best, score: bestScore };
+    return { el: best, score: bestScore, matchedBy };
   };
 
   const visible = candidates.filter(isElementVisibleForAnchor);
   const visiblePick = pickBest(visible.length > 0 ? visible : candidates);
-  if (visiblePick.el && visiblePick.score >= minScore) return visiblePick.el;
+  if (visiblePick.el && visiblePick.score >= minScore) {
+    return {
+      element: visiblePick.el,
+      evidence: { matchedBy: visiblePick.matchedBy, matchScore: visiblePick.score, lastValidatedAt: validatedAt }
+    };
+  }
 
   const anyPick = pickBest(candidates);
-  if (!anyPick.el || anyPick.score < minScore) return null;
-  if (isElementVisibleForAnchor(anyPick.el)) return anyPick.el;
-  if (hasStableSelector(anchor)) return anyPick.el;
-  return null;
+  if (!anyPick.el || anyPick.score < minScore) {
+    return {
+      element: null,
+      evidence: {
+        matchedBy: anyPick.matchedBy,
+        matchScore: anyPick.score,
+        failureReason: `best candidate score ${anyPick.score} is below required ${minScore}`,
+        lastValidatedAt: validatedAt
+      }
+    };
+  }
+  if (isElementVisibleForAnchor(anyPick.el)) {
+    return {
+      element: anyPick.el,
+      evidence: { matchedBy: anyPick.matchedBy, matchScore: anyPick.score, lastValidatedAt: validatedAt }
+    };
+  }
+  if (hasStableSelector(anchor)) {
+    return {
+      element: anyPick.el,
+      evidence: { matchedBy: anyPick.matchedBy, matchScore: anyPick.score, failureReason: 'stable selector matched hidden element', lastValidatedAt: validatedAt }
+    };
+  }
+  return {
+    element: null,
+    evidence: { matchedBy: anyPick.matchedBy, matchScore: anyPick.score, failureReason: 'best candidate is hidden and no stable selector can justify it', lastValidatedAt: validatedAt }
+  };
 }
 
 export function getAnchorHealth(anchor: NoteAnchor): AnchorHealth {
@@ -195,6 +255,23 @@ function scoreAnchorMatch(el: Element, anchor: NoteAnchor): number {
   score += scoreLayoutHint(el, anchor.layoutHint);
 
   return Math.max(0, score);
+}
+
+function inferMatchMethod(el: Element, anchor: NoteAnchor): AnchorMatchMethod {
+  if (anchor.noteId && !anchor.noteId.startsWith('xpath_') && el.getAttribute('data-note-id') === anchor.noteId) {
+    return 'data-note-id';
+  }
+  for (const selector of anchor.selectors ?? []) {
+    if (!selector || !elementMatches(el, selector)) continue;
+    if (selector.startsWith('#')) return 'id';
+    if (selector.includes('[data-note-id=')) return 'data-note-id';
+    return 'css';
+  }
+  if (anchor.cssSelector && elementMatches(el, anchor.cssSelector)) return anchor.cssSelector.startsWith('#') ? 'id' : 'css';
+  if (anchor.xpath && getElementXPath(el) === anchor.xpath) return 'xpath';
+  if (anchor.textHint && scoreTextMatch(el, anchor.textHint) > 0) return 'text';
+  if (anchor.layoutHint && scoreLayoutHint(el, anchor.layoutHint) > 0) return 'layout';
+  return 'none';
 }
 
 function scoreTextMatch(el: Element, hint: string): number {

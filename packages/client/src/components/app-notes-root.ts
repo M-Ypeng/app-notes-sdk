@@ -1,5 +1,6 @@
-import type { AnchorRect, AppNotesConfig, FlatNote } from '../types.js';
-import { resolveAnchorFromElement, findElementByAnchor, inferAnchorHealth } from '../utils/dom-anchor.js';
+import { APP_NOTES_SCHEMA_VERSION } from '../types.js';
+import type { AnchorRect, AppNotesConfig, FlatNote, NoteAnchor, NotesFile, NotesFixRecord, NotesRuntimeContext } from '../types.js';
+import { resolveAnchorFromElement, resolveElementByAnchor, inferAnchorHealth } from '../utils/dom-anchor.js';
 import { scheduleAfterDomSettle } from '../utils/dom-settle.js';
 import {
   getCurrentPagePath,
@@ -196,6 +197,9 @@ export class AppNotesRoot extends HTMLElement {
       this.closePanelIfOpen();
       this.overlay.start();
     }) as EventListener);
+    this.addEventListener('update-fix-record', ((event: CustomEvent<{ note: FlatNote; fix: NotesFixRecord }>) => {
+      void this.handleUpdateFix(event.detail.note, event.detail.fix);
+    }) as EventListener);
   }
 
   private setupShortcut(): void {
@@ -248,16 +252,19 @@ export class AppNotesRoot extends HTMLElement {
       images.push(await this.api.uploadImage(file));
     }
     const anchor = { ...detail.anchor, pagePath: getCurrentPagePath() };
+    const context = captureRuntimeContext(anchor.pagePath);
     const comment = await this.api.appendComment(anchor, {
       content: detail.content,
       images,
       tags: detail.tags,
-      role: detail.role
-    });
+      role: detail.role,
+      ai: detail.ai
+    }, context);
     this.store.addFile({
-      schemaVersion: 1,
+      schemaVersion: APP_NOTES_SCHEMA_VERSION,
       anchor,
       comments: [comment],
+      context,
       meta: { createdAt: comment.createdAt, updatedAt: comment.updatedAt ?? comment.createdAt }
     });
     await this.loadNotes();
@@ -267,6 +274,24 @@ export class AppNotesRoot extends HTMLElement {
     const updated = await this.api.archiveComment(note.noteId, note.comment.id, status);
     this.store.updateCommentStatus(note.noteId, note.comment.id, updated.status);
     this.panel.showDetail({ ...note, comment: updated });
+  }
+
+  private async handleUpdateFix(note: FlatNote, fix: NotesFixRecord): Promise<void> {
+    try {
+      const file = await this.api.updateFix(note.noteId, fix);
+      const updatedFile = this.store.updateFix(note.noteId, file.fix ?? fix) ?? file;
+      const updatedComment = updatedFile.comments.find((comment) => comment.id === note.comment.id) ?? note.comment;
+      this.panel.showDetail({
+        noteId: updatedFile.anchor.noteId,
+        anchor: updatedFile.anchor,
+        comment: updatedComment,
+        fix: updatedFile.fix
+      });
+      this.panel.showLocateMessage('修复记录已保存。', 'success');
+    } catch (error) {
+      console.warn('[app-notes] failed to update fix record', error);
+      this.panel.showLocateMessage('修复记录保存失败。', 'warning');
+    }
   }
 
   private async handleRebindSelected(note: FlatNote, anchor: FlatNote['anchor']): Promise<void> {
@@ -314,14 +339,16 @@ export class AppNotesRoot extends HTMLElement {
   }
 
   private locateNote(note: FlatNote): boolean {
-    const el = findElementByAnchor(note.anchor);
+    const result = resolveElementByAnchor(note.anchor);
+    const el = result.element;
     if (!el) {
-      this.store.updateAnchorHealth(note.noteId, 'invalid');
+      this.updateAnchorValidation(note.anchor, 'invalid', result.evidence);
       return false;
     }
-    this.store.updateAnchorHealth(note.noteId, inferAnchorHealth(note.anchor));
+    const updated = this.updateAnchorValidation(note.anchor, inferAnchorHealth(note.anchor), result.evidence);
+    const locatedNote = updated?.file ? { ...note, anchor: updated.file.anchor } : note;
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    this.pulseHighlight(note);
+    this.pulseHighlight(locatedNote);
     return true;
   }
 
@@ -347,12 +374,12 @@ export class AppNotesRoot extends HTMLElement {
       this.hideHoverHighlight();
       return;
     }
-    const el = findElementByAnchor(note.anchor);
-    if (!el) {
+    const result = resolveElementByAnchor(note.anchor);
+    if (!result.element) {
       this.hideHoverHighlight();
       return;
     }
-    const rect = el.getBoundingClientRect();
+    const rect = result.element.getBoundingClientRect();
     if (!this.hoverHighlight) {
       this.hoverHighlight = document.createElement('div');
       this.hoverHighlight.setAttribute('data-app-notes-hover-highlight', '');
@@ -433,12 +460,27 @@ export class AppNotesRoot extends HTMLElement {
         this.bubbles.set(key, bubble);
       }
       if (bubble.parentElement !== this) this.appendChild(bubble);
-      const target = findElementByAnchor(file.anchor);
+      const result = resolveElementByAnchor(file.anchor);
       if (file.anchor.health !== 'rebind_required') {
-        this.store.updateAnchorHealth(file.anchor.noteId, target ? inferAnchorHealth(file.anchor) : 'invalid');
+        this.updateAnchorValidation(file.anchor, result.element ? inferAnchorHealth(file.anchor) : 'invalid', result.evidence);
       }
       bubble.setContext(this.config.serverUrl, this.config.pagePath);
-      bubble.setFile(file, target);
+      bubble.setFile(file, result.element);
+    }
+  }
+
+  private updateAnchorValidation(anchor: NoteAnchor, health: NoteAnchor['health'], evidence: NoteAnchor['evidence']): { changed: boolean; file: NotesFile | null } | null {
+    if (!health || !evidence) return null;
+    const updated = this.store.updateAnchorValidation(anchor.noteId, health, evidence);
+    if (updated?.changed && updated.file) void this.persistAnchor(updated.file.anchor);
+    return updated;
+  }
+
+  private async persistAnchor(anchor: NoteAnchor): Promise<void> {
+    try {
+      await this.api.updateAnchor(anchor.noteId, anchor);
+    } catch (error) {
+      console.warn('[app-notes] failed to persist anchor validation', error);
     }
   }
 
@@ -533,6 +575,21 @@ function findBubbleInPath(event: Event): AppNotesBubble | null {
 
 function getBubbleKey(pagePath: string, noteId: string): string {
   return `${normalizePagePath(pagePath)}:${noteId}`;
+}
+
+function captureRuntimeContext(pagePath: string): NotesRuntimeContext {
+  return {
+    url: window.location.href,
+    pagePath,
+    title: document.title,
+    viewport: {
+      width: window.innerWidth,
+      height: window.innerHeight,
+      devicePixelRatio: window.devicePixelRatio || 1
+    },
+    userAgent: window.navigator.userAgent,
+    capturedAt: new Date().toISOString()
+  };
 }
 
 if (!customElements.get(AppNotesRoot.tag)) {

@@ -1,4 +1,4 @@
-import type { NoteAnchor, NoteComment, NotesFile } from '../types.js';
+import type { NoteAnchor, NoteComment, NotesFile, NotesFixRecord, NotesRuntimeContext } from '../types.js';
 
 export interface NotesListResponse {
   pagePath?: string;
@@ -8,8 +8,13 @@ export interface NotesListResponse {
 export interface AppendPayload {
   anchor: NoteAnchor;
   comment: Omit<NoteComment, 'id' | 'status' | 'createdAt'>;
+  context?: NotesRuntimeContext;
 }
 
 export interface UpdateAnchorPayload {
   anchor: NoteAnchor;
+}
+
+export interface UpdateFixPayload {
+  fix: NotesFixRecord;
 }

@@ -1,7 +1,7 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import multer from 'multer';
 import path from 'node:path';
-import type { AppendCommentBody, ArchiveCommentBody, UpdateAnchorBody } from './types.js';
+import type { AppendCommentBody, ArchiveCommentBody, UpdateAnchorBody, UpdateFixBody } from './types.js';
 import { NotesStorage } from './storage.js';
 
 const ALLOWED_IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml']);
@@ -92,6 +92,24 @@ export function createRoutes(storage: NotesStorage): Router {
         return;
       }
       const file = await storage.updateAnchor(req.params.noteId, body.anchor);
+      if (!file) {
+        res.status(404).json({ error: 'NOT_FOUND' });
+        return;
+      }
+      res.json({ file });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.patch('/notes/:noteId/fix', async (req, res, next) => {
+    try {
+      const body = req.body as UpdateFixBody;
+      if (!body?.fix || typeof body.fix !== 'object') {
+        res.status(400).json({ error: 'fix is required' });
+        return;
+      }
+      const file = await storage.updateFix(req.params.noteId, body.fix);
       if (!file) {
         res.status(404).json({ error: 'NOT_FOUND' });
         return;

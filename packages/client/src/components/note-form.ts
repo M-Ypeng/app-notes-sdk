@@ -1,5 +1,5 @@
 import { SHARED_STYLES } from '../styles/shared.js';
-import { NOTE_ROLES, NOTE_TAGS, TAG_LABELS, type NoteAnchor, type NoteRole, type NoteTag } from '../types.js';
+import { NOTE_ROLES, NOTE_TAGS, TAG_LABELS, type NoteAiContext, type NoteAnchor, type NoteRole, type NoteTag } from '../types.js';
 import { clamp, escapeAttr, tagClass } from '../utils/format.js';
 
 export interface NoteFormSubmitDetail {
@@ -8,6 +8,7 @@ export interface NoteFormSubmitDetail {
   tags: NoteTag[];
   role: NoteRole;
   imageFiles: File[];
+  ai?: NoteAiContext;
   onSuccess?: () => void;
   onError?: (error: unknown) => void;
 }
@@ -43,6 +44,10 @@ export class AppNotesForm extends HTMLElement {
     this.setAttribute('open', '');
     const root = this.shadowRoot!;
     (root.getElementById('content') as HTMLTextAreaElement).value = '';
+    (root.getElementById('expected') as HTMLTextAreaElement).value = '';
+    (root.getElementById('actual') as HTMLTextAreaElement).value = '';
+    (root.getElementById('steps') as HTMLTextAreaElement).value = '';
+    (root.getElementById('fix-hints') as HTMLTextAreaElement).value = '';
     (root.getElementById('role') as HTMLSelectElement).value = 'PM';
     root.querySelectorAll<HTMLInputElement>('input[name="tag"]').forEach((input) => { input.checked = false; });
     root.getElementById('preview')!.innerHTML = '';
@@ -200,6 +205,49 @@ export class AppNotesForm extends HTMLElement {
           outline: 0;
           border-color: transparent;
           box-shadow: none;
+        }
+        .ai-details {
+          border-top: 1px solid rgba(60, 60, 67, 0.08);
+          background: rgba(255, 255, 255, 0.14);
+        }
+        .ai-details summary {
+          cursor: pointer;
+          padding: 10px 18px;
+          color: var(--an-text-muted);
+          font-size: 12px;
+          font-weight: 700;
+          user-select: none;
+        }
+        .ai-grid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 8px;
+          padding: 0 18px 12px;
+        }
+        .ai-field {
+          min-width: 0;
+        }
+        .ai-field.full {
+          grid-column: 1 / -1;
+        }
+        .ai-field label {
+          display: block;
+          margin: 0 0 4px;
+          color: var(--an-text-muted);
+          font-size: 10px;
+          font-weight: 700;
+        }
+        .ai-field textarea {
+          min-height: 52px;
+          padding: 8px 10px;
+          border: 1px solid rgba(60, 60, 67, 0.1);
+          border-radius: 10px;
+          background: rgba(255, 255, 255, 0.62);
+          font-size: 12px;
+          line-height: 1.45;
+        }
+        .ai-field.full textarea {
+          min-height: 48px;
         }
         .tags {
           display: flex;
@@ -368,6 +416,27 @@ export class AppNotesForm extends HTMLElement {
           </div>
         </div>
         <textarea id="content" placeholder="写下需要修复的问题..."></textarea>
+        <details class="ai-details">
+          <summary>补充给 AI 的信息</summary>
+          <div class="ai-grid">
+            <div class="ai-field">
+              <label for="expected">期望</label>
+              <textarea id="expected" placeholder="应该发生什么"></textarea>
+            </div>
+            <div class="ai-field">
+              <label for="actual">实际</label>
+              <textarea id="actual" placeholder="现在发生了什么"></textarea>
+            </div>
+            <div class="ai-field full">
+              <label for="steps">复现步骤</label>
+              <textarea id="steps" placeholder="每行一步，例如：点击新增批注"></textarea>
+            </div>
+            <div class="ai-field full">
+              <label for="fix-hints">修复线索</label>
+              <textarea id="fix-hints" placeholder="每行一条，例如：检查 note-form 的 click 绑定"></textarea>
+            </div>
+          </div>
+        </details>
         <div class="tags">${tags}</div>
         <div class="error" id="error" role="alert"></div>
         <div class="preview-wrap" id="dropzone">
@@ -695,6 +764,7 @@ export class AppNotesForm extends HTMLElement {
     if (!this.anchor || this.submitting) return;
     const root = this.shadowRoot!;
     const content = (root.getElementById('content') as HTMLTextAreaElement).value.trim();
+    const ai = readAiContext(root);
     const tags = Array.from(root.querySelectorAll<HTMLInputElement>('input[name="tag"]:checked')).map((item) => item.value as NoteTag);
     const role = (root.getElementById('role') as HTMLSelectElement).value as NoteRole;
     if (!content && this.pendingImages.length === 0) {
@@ -712,6 +782,7 @@ export class AppNotesForm extends HTMLElement {
         tags,
         role,
         imageFiles: [...this.pendingImages],
+        ai,
         onSuccess: () => this.close(),
         onError: (error) => {
           this.setSubmitting(false);
@@ -784,6 +855,27 @@ export class AppNotesForm extends HTMLElement {
 function getSubmitErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message) return `提交失败：${error.message}`;
   return '提交失败：请检查本地备注服务是否启动后重试。';
+}
+
+function readAiContext(root: ShadowRoot): NoteAiContext | undefined {
+  const expected = (root.getElementById('expected') as HTMLTextAreaElement).value.trim();
+  const actual = (root.getElementById('actual') as HTMLTextAreaElement).value.trim();
+  const stepsToReproduce = splitLines((root.getElementById('steps') as HTMLTextAreaElement).value);
+  const fixHints = splitLines((root.getElementById('fix-hints') as HTMLTextAreaElement).value);
+  if (!expected && !actual && stepsToReproduce.length === 0 && fixHints.length === 0) return undefined;
+  return {
+    ...(expected ? { expected } : {}),
+    ...(actual ? { actual } : {}),
+    ...(stepsToReproduce.length ? { stepsToReproduce } : {}),
+    ...(fixHints.length ? { fixHints } : {})
+  };
+}
+
+function splitLines(value: string): string[] {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
 }
 
 if (!customElements.get(AppNotesForm.tag)) {

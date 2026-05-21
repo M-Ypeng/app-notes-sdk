@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import express from 'express';
 import cors from 'cors';
+import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRoutes } from './routes.js';
@@ -59,9 +60,16 @@ export async function startServer(options?: Partial<CliOptions>): Promise<{ port
   });
 }
 
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+function isCliEntry(): boolean {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(path.resolve(process.argv[1]));
+  } catch {
+    return fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+  }
+}
 
-if (isMain) {
+if (isCliEntry()) {
   startServer().catch((error) => {
     console.error(error);
     process.exit(1);

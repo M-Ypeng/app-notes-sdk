@@ -5,17 +5,23 @@ import type { AppNotesConfig } from './src/types.js';
 
 export type {
   AnchorHealth,
+  AnchorEvidence,
   AnchorLayoutHint,
+  AnchorMatchMethod,
   AppNotesConfig,
   CommentStatus,
   FlatNote,
+  NoteAiContext,
   NoteAnchor,
   NoteComment,
   NoteRole,
   NoteTag,
-  NotesFile
+  NotesFile,
+  NotesFixRecord,
+  NotesRuntimeContext
 } from './src/types.js';
 
+export { APP_NOTES_SCHEMA_VERSION } from './src/types.js';
 export { AppNotesRoot } from './src/components/app-notes-root.js';
 export { isDevEnvironment } from './src/utils/env.js';
 export {

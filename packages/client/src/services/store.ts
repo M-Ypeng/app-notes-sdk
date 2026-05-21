@@ -1,7 +1,8 @@
-import type { AnchorHealth, FlatNote, NoteAnchor, NotesFile } from '../types.js';
+import type { AnchorEvidence, AnchorHealth, FlatNote, NoteAnchor, NotesFile, NotesFixRecord } from '../types.js';
 import { getAnchorHealth } from '../utils/dom-anchor.js';
 
 type Listener = () => void;
+type AnchorValidationUpdate = { changed: boolean; file: NotesFile | null };
 
 export class NotesStore {
   private files: NotesFile[] = [];
@@ -27,7 +28,7 @@ export class NotesStore {
     for (const file of this.files) {
       for (const comment of file.comments) {
         if (!includeArchived && comment.status === 'archived') continue;
-        notes.push({ noteId: file.anchor.noteId, anchor: file.anchor, comment });
+        notes.push({ noteId: file.anchor.noteId, anchor: file.anchor, comment, fix: file.fix });
       }
     }
     return notes.sort((a, b) => new Date(b.comment.createdAt).getTime() - new Date(a.comment.createdAt).getTime());
@@ -85,6 +86,40 @@ export class NotesStore {
     if (!file || file.anchor.health === health) return file ?? null;
     const now = new Date().toISOString();
     file.anchor = { ...file.anchor, health };
+    file.meta = { createdAt: file.meta?.createdAt ?? now, updatedAt: now };
+    this.emit();
+    return file;
+  }
+
+  updateAnchorValidation(noteId: string, health: AnchorHealth, evidence: AnchorEvidence): AnchorValidationUpdate {
+    const file = this.files.find((item) => item.anchor.noteId === noteId);
+    if (!file) return { changed: false, file: null };
+    const current = file.anchor.evidence;
+    const changed =
+      file.anchor.health !== health ||
+      current?.matchedBy !== evidence.matchedBy ||
+      current?.matchScore !== evidence.matchScore ||
+      current?.failureReason !== evidence.failureReason;
+    if (!changed) return { changed: false, file };
+    const now = new Date().toISOString();
+    file.anchor = {
+      ...file.anchor,
+      health,
+      evidence: {
+        ...evidence,
+        lastValidatedAt: evidence.lastValidatedAt ?? now
+      }
+    };
+    file.meta = { createdAt: file.meta?.createdAt ?? now, updatedAt: now };
+    this.emit();
+    return { changed: true, file };
+  }
+
+  updateFix(noteId: string, fix: NotesFixRecord): NotesFile | null {
+    const file = this.files.find((item) => item.anchor.noteId === noteId);
+    if (!file) return null;
+    const now = new Date().toISOString();
+    file.fix = fix;
     file.meta = { createdAt: file.meta?.createdAt ?? now, updatedAt: now };
     this.emit();
     return file;

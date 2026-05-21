@@ -1,5 +1,7 @@
-export type { AnchorHealth, CommentStatus, NoteAnchor, NoteComment, NoteRole, NotesFile, NoteTag } from '../../client/dist/index.js';
-import type { CommentStatus, NoteAnchor, NoteComment } from '../../client/dist/index.js';
+export type { AnchorHealth, CommentStatus, NoteAnchor, NoteComment, NoteRole, NotesFile, NotesFixRecord, NotesRuntimeContext, NoteTag } from '../../client/dist/index.js';
+import type { CommentStatus, NoteAnchor, NoteComment, NotesFixRecord, NotesRuntimeContext } from '../../client/dist/index.js';
+
+export const APP_NOTES_SCHEMA_VERSION = 2 as const;
 
 export interface AppendCommentBody {
   anchor: NoteAnchor;
@@ -8,6 +10,7 @@ export interface AppendCommentBody {
     status?: CommentStatus;
     createdAt?: string;
   };
+  context?: NotesRuntimeContext;
 }
 
 export interface ArchiveCommentBody {
@@ -16,4 +19,8 @@ export interface ArchiveCommentBody {
 
 export interface UpdateAnchorBody {
   anchor: NoteAnchor;
+}
+
+export interface UpdateFixBody {
+  fix: NotesFixRecord;
 }

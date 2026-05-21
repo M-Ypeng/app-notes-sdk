@@ -1,7 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { AppendCommentBody, ArchiveCommentBody, NoteAnchor, NoteComment, NotesFile } from './types.js';
+import { APP_NOTES_SCHEMA_VERSION } from './types.js';
+import type { AppendCommentBody, ArchiveCommentBody, NoteAnchor, NoteComment, NotesFile, NotesFixRecord } from './types.js';
 
 const NOTES_DIR = '.app_notes';
 const ASSETS_DIR = 'assets';
@@ -75,18 +76,21 @@ export class NotesStorage {
         tags: body.comment.tags ?? [],
         role: body.comment.role,
         status: body.comment.status ?? 'open',
-        createdAt: body.comment.createdAt ?? now
+        createdAt: body.comment.createdAt ?? now,
+        ai: body.comment.ai
       };
       let file = await this.readNotesFile(noteId);
       if (!file) {
         file = {
-          schemaVersion: 1,
+          schemaVersion: APP_NOTES_SCHEMA_VERSION,
           anchor: body.anchor,
           comments: [],
+          context: body.context,
           meta: { createdAt: now, updatedAt: now }
         };
       } else {
         file.anchor = { ...file.anchor, ...body.anchor };
+        file.context = body.context ?? file.context;
         file.meta = { createdAt: file.meta?.createdAt ?? now, updatedAt: now };
       }
       file.comments.push(comment);
@@ -116,6 +120,18 @@ export class NotesStorage {
       if (!file) return null;
       const now = new Date().toISOString();
       file.anchor = { ...anchor, noteId };
+      file.meta = { createdAt: file.meta?.createdAt ?? now, updatedAt: now };
+      await this.writeNotesFile(noteId, file);
+      return file;
+    });
+  }
+
+  async updateFix(noteId: string, fix: NotesFixRecord): Promise<NotesFile | null> {
+    return this.enqueue(async () => {
+      const file = await this.readNotesFile(noteId);
+      if (!file) return null;
+      const now = new Date().toISOString();
+      file.fix = fix;
       file.meta = { createdAt: file.meta?.createdAt ?? now, updatedAt: now };
       await this.writeNotesFile(noteId, file);
       return file;
@@ -166,9 +182,11 @@ export class NotesStorage {
 
 function normalizeNotesFile(file: Partial<NotesFile>): NotesFile {
   return {
-    schemaVersion: 1,
+    schemaVersion: APP_NOTES_SCHEMA_VERSION,
     anchor: file.anchor!,
     comments: file.comments ?? [],
+    context: file.context,
+    fix: file.fix,
     meta: file.meta
   };
 }

@@ -172,13 +172,16 @@ interface NoteAnchor {
   selectorHint?: string;
   textHint?: string;
   tagName?: string;
+  health?: AnchorHealth;
+  layoutHint?: AnchorLayoutHint;
+  evidence?: AnchorEvidence;
 }
 
-interface AnchorRect {
-  top: number;
-  left: number;
-  width: number;
-  height: number;
+interface AnchorEvidence {
+  matchedBy?: 'data-note-id' | 'id' | 'css' | 'xpath' | 'text' | 'layout' | 'none';
+  matchScore?: number;
+  failureReason?: string;
+  lastValidatedAt?: string;
 }
 ```
 
@@ -287,6 +290,7 @@ app-notes-server --port 3927 --root /path/to/project
 .app_notes/
   ComponentA.notes.json
   xpath_xxxxx.notes.json
+  AI_CONTEXT.md
   assets/
     image-xxx.png
 ```
@@ -301,9 +305,11 @@ app-notes-server --port 3927 --root /path/to/project
 
 ```ts
 interface NotesFile {
-  schemaVersion: 1;
+  schemaVersion: 2;
   anchor: NoteAnchor;
   comments: NoteComment[];
+  context?: NotesRuntimeContext;
+  fix?: NotesFixRecord;
   meta?: {
     createdAt: string;
     updatedAt: string;
@@ -327,16 +333,74 @@ interface NoteComment {
   status: CommentStatus;
   createdAt: string;
   updatedAt?: string;
+  ai?: {
+    expected?: string;
+    actual?: string;
+    stepsToReproduce?: string[];
+    fixHints?: string[];
+  };
 }
 ```
 
-### 10.3 NotesFile
+### 10.3 NoteAnchor
 
 ```ts
+type AnchorHealth = 'stable' | 'medium' | 'low' | 'invalid' | 'rebind_required';
+type AnchorMatchMethod = 'data-note-id' | 'id' | 'css' | 'xpath' | 'text' | 'layout' | 'none';
+
+interface AnchorEvidence {
+  matchedBy?: AnchorMatchMethod;
+  matchScore?: number;
+  failureReason?: string;
+  lastValidatedAt?: string;
+}
+
+interface NoteAnchor {
+  noteId: string;
+  pagePath: string;
+  xpath?: string;
+  cssSelector?: string;
+  selectors?: string[];
+  selectorHint?: string;
+  textHint?: string;
+  tagName?: string;
+  health?: AnchorHealth;
+  layoutHint?: AnchorLayoutHint;
+  evidence?: AnchorEvidence;
+}
+```
+
+`evidence` 是给 AI 和维护者看的证据链：说明最近一次定位是通过什么方式匹配、分数多少、失败原因是什么。`invalid` 和 `rebind_required` 不应只存在于 UI 状态中，也应写回 `.app_notes`，避免统计永远为 0。
+
+### 10.4 NotesRuntimeContext / FixRecord
+
+```ts
+interface NotesRuntimeContext {
+  url?: string;
+  pagePath?: string;
+  title?: string;
+  viewport?: {
+    width: number;
+    height: number;
+    devicePixelRatio: number;
+  };
+  userAgent?: string;
+  capturedAt?: string;
+}
+
+interface NotesFixRecord {
+  summary?: string;
+  changedFiles?: string[];
+  verified?: boolean;
+  verifiedAt?: string;
+}
+
 interface NotesFile {
-  schemaVersion: 1;
+  schemaVersion: 2;
   anchor: NoteAnchor;
   comments: NoteComment[];
+  context?: NotesRuntimeContext;
+  fix?: NotesFixRecord;
   meta?: {
     createdAt: string;
     updatedAt: string;
@@ -344,17 +408,23 @@ interface NotesFile {
 }
 ```
 
-### 10.4 文件示例
+### 10.5 文件示例
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "anchor": {
     "noteId": "SubmitButton",
     "pagePath": "/dashboard",
     "xpath": "/html/body/div[1]/button[1]",
     "cssSelector": "[data-note-id=\"SubmitButton\"]",
-    "textHint": "提交"
+    "textHint": "提交",
+    "health": "stable",
+    "evidence": {
+      "matchedBy": "data-note-id",
+      "matchScore": 100,
+      "lastValidatedAt": "2026-05-20T10:00:00.000Z"
+    }
   },
   "comments": [
     {
@@ -364,9 +434,30 @@ interface NotesFile {
       "tags": ["视觉规范"],
       "role": "UI",
       "status": "open",
-      "createdAt": "2026-05-19T10:00:00.000Z"
+      "createdAt": "2026-05-19T10:00:00.000Z",
+      "ai": {
+        "expected": "按钮使用品牌主色",
+        "actual": "按钮当前是默认灰色",
+        "fixHints": ["检查按钮样式 token"]
+      }
     }
-  ]
+  ],
+  "context": {
+    "url": "http://localhost:5173/dashboard",
+    "pagePath": "/dashboard",
+    "title": "Dashboard",
+    "viewport": {
+      "width": 1440,
+      "height": 900,
+      "devicePixelRatio": 2
+    },
+    "capturedAt": "2026-05-19T10:00:00.000Z"
+  },
+  "fix": {
+    "summary": "调整提交按钮为品牌主色",
+    "changedFiles": ["src/components/SubmitButton.vue"],
+    "verified": false
+  }
 }
 ```
 
@@ -402,7 +493,8 @@ POST /api/notes
 ```json
 {
   "anchor": {},
-  "comment": {}
+  "comment": {},
+  "context": {}
 }
 ```
 
@@ -418,7 +510,40 @@ PATCH /api/notes/:noteId/comments/:commentId
 }
 ```
 
-### 11.6 上传图片
+### 11.6 更新锚点
+
+```http
+PATCH /api/notes/:noteId/anchor
+```
+
+用于重新绑定元素、写回 health/evidence、更新定位证据。
+
+```json
+{
+  "anchor": {}
+}
+```
+
+### 11.7 更新修复记录
+
+```http
+PATCH /api/notes/:noteId/fix
+```
+
+用于 AI 或开发工具写回修复摘要、改动文件、验证状态。
+
+```json
+{
+  "fix": {
+    "summary": "修复按钮颜色",
+    "changedFiles": ["src/App.vue"],
+    "verified": true,
+    "verifiedAt": "2026-05-20T10:00:00.000Z"
+  }
+}
+```
+
+### 11.8 上传图片
 
 ```http
 POST /api/upload
@@ -426,7 +551,7 @@ POST /api/upload
 
 表单字段：`file`
 
-### 11.7 访问图片
+### 11.9 访问图片
 
 ```http
 GET /api/assets/:filename
@@ -485,12 +610,18 @@ MVP 可接受目标：
 
 ## 14. AI 扩展设计
 
-### 14.1 Export API
+### 14.1 Markdown 导出
 
-后续提供：
+当前提供本地导出脚本：
 
-```http
-GET /api/export
+```bash
+pnpm export:ai-context
+```
+
+默认读取当前工作目录 `.app_notes/*.notes.json`，输出：
+
+```text
+.app_notes/AI_CONTEXT.md
 ```
 
 导出内容：
@@ -498,13 +629,25 @@ GET /api/export
 - open 状态备注。
 - 页面路径。
 - 元素锚点。
-- DOM 片段。
-- 文本提示。
+- 文本提示和图片附件。
+- 锚点健康度和 evidence。
 - 图片附件。
 - 视口信息。
-- 用户修复意图。
+- 用户修复意图 (`comment.ai`)。
+- 修复记录 (`fix`)。
+- invalid / rebind_required / low 优先排序。
 
-### 14.2 MCP Server
+### 14.2 Export API
+
+后续可提供：
+
+```http
+GET /api/export
+```
+
+用于远程工具读取同等结构，不依赖本地脚本。
+
+### 14.3 MCP Server
 
 候选工具：
 
@@ -531,6 +674,7 @@ M1 已按以下顺序完成实现：
 M2 规划内容：
 - 多框架接入验证 (React/Vue/原生 JS)
 - React/Vue wrapper 适配包
-- 锚点健康度报告
-- 跨页跳转定位
-- 重新绑定元素
+- 锚点健康度报告（已实现基础统计）
+- 跨页跳转定位（已支持 `onNavigateToPage` 与 pending locate）
+- 重新绑定元素（已支持并持久化 anchor）
+- AI 上下文导出（已提供 `pnpm export:ai-context`）
