@@ -19,8 +19,9 @@
 ```text
 app-notes-sdk/
   docs/
-    PRD.md
-    TECH_DESIGN.md
+    产品需求文档.md
+    技术设计文档.md
+    项目状态.md
   packages/
     client/
       src/
@@ -270,7 +271,8 @@ npm 风格的包共享，使用 `pnpm pack:release` 生成的 release tarball。
 
 在进行较大的产品或架构变更前，请阅读：
 
-- `docs/PRD.md`
-- `docs/TECH_DESIGN.md`
+- `docs/产品需求文档.md`
+- `docs/技术设计文档.md`
+- `docs/项目状态.md`
 
 修改产品行为、架构、存储格式或公开集成 API 时，请同步更新这些文档。
