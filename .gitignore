@@ -4,3 +4,5 @@ dist/
 .DS_Store
 .app_notes/
 .npm-cache/
+release/
+前端标注工具/

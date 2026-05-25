@@ -5,7 +5,8 @@
   "type": "module",
   "main": "./dist/index.js",
   "bin": {
-    "app-notes-server": "./dist/index.js"
+    "app-notes-server": "./dist/index.js",
+    "app-notes-export-ai-context": "./dist/export-ai-context.js"
   },
   "files": [
     "dist"
